@@ -1,0 +1,12 @@
+[2026-10-30T19:12:53+00] INFO  [netwatch] Watching 4 target(s): one.one.one.one, dns:example.com, https://nghttp2.org/httpbin/status/503, 8.8.8.8 | interval=2.0s timeout=3.0s warn=250.0ms
+[2026-10-30T19:12:53+00] WARN  [8.8.8.8] ICMP не проходит, а TCP открыт — переключаюсь на TCP-пинг (53)
+[2026-10-30T19:12:53+00] WARN  [https://nghttp2.org/httpbin/status/503] HTTP 5xx — серверная ошибка
+[2026-10-30T19:13:05+00] WARN  [https://nghttp2.org/httpbin/status/503] SLOW/PARTIAL: http_5xx
+[2026-10-30T19:13:07+00] INFO  [https://nghttp2.org/httpbin/status/503] RECOVERED: rtt=239ms (probes total=8)
+[2026-10-30T19:13:09+00] INFO  [netwatch] Stopped
+
+Итоги:
+   ● one.one.one.one                UP        [  tls] rtt=    2ms avg=     2ms jit=   1ms loss=  0.0% (0/8)  p95=3ms TLSv1.3 hs=6ms cert 52d left
+   ● dns:example.com                UP        [  dns] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/9)  p95=3ms @9.9.9.9 rcode=0 answers=104.20.23.154,1
+   ● https://nghttp2.org/httpbin/status/503 UP        [https] rtt=  239ms avg=   240ms jit=   7ms loss=  0.0% (0/8)  p95=252ms HTTP 502
+   ● 8.8.8.8                        UP        [ icmp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/9)  p95=3ms

@@ -1,0 +1,41 @@
+Цели не заданы — беру стандартный набор: 1.1.1.1, 8.8.8.8, https://www.google.com, https://one.one.one.one
+[2026-10-30T19:13:39+00] INFO  [netwatch] Watching 4 target(s): 1.1.1.1, 8.8.8.8, https://www.google.com, https://one.one.one.one | interval=5.0s timeout=2.0s warn=250.0ms
+[2026-10-30T19:13:39+00] WARN  [1.1.1.1] ICMP не проходит, а TCP открыт — переключаюсь на TCP-пинг (53)
+[2026-10-30T19:13:39+00] WARN  [8.8.8.8] ICMP не проходит, а TCP открыт — переключаюсь на TCP-пинг (53)
+── netwatch · 2026-10-30T19:13:41+00  (Ctrl+C — выход)
+ ● 1.1.1.1                        UP        [ icmp] rtt=    2ms avg=     2ms jit=     - loss=  0.0% (0/1)  p95=2ms
+ ● 8.8.8.8                        UP        [ icmp] rtt=    3ms avg=     3ms jit=     - loss=  0.0% (0/1)  p95=3ms
+ ● https://www.google.com         UP        [https] rtt=  148ms avg=   148ms jit=     - loss=  0.0% (0/1)  p95=148ms HTTP 200
+ ● https://one.one.one.one        UP        [https] rtt=  145ms avg=   145ms jit=     - loss=  0.0% (0/1)  p95=145ms HTTP 200
+
+── netwatch · 2026-10-30T19:13:43+00  (Ctrl+C — выход)
+ ● 1.1.1.1                        UP        [ icmp] rtt=    2ms avg=     2ms jit=     - loss=  0.0% (0/1)  p95=2ms
+ ● 8.8.8.8                        UP        [ icmp] rtt=    3ms avg=     3ms jit=     - loss=  0.0% (0/1)  p95=3ms
+ ● https://www.google.com         UP        [https] rtt=  148ms avg=   148ms jit=     - loss=  0.0% (0/1)  p95=148ms HTTP 200
+ ● https://one.one.one.one        UP        [https] rtt=  145ms avg=   145ms jit=     - loss=  0.0% (0/1)  p95=145ms HTTP 200
+
+── netwatch · 2026-10-30T19:13:45+00  (Ctrl+C — выход)
+ ● 1.1.1.1                        UP        [ icmp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/2)  p95=2ms
+ ● 8.8.8.8                        UP        [ icmp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/2)  p95=3ms
+ ● https://www.google.com         UP        [https] rtt=  135ms avg=   142ms jit=  13ms loss=  0.0% (0/2)  p95=148ms HTTP 200
+ ● https://one.one.one.one        UP        [https] rtt=  120ms avg=   133ms jit=  25ms loss=  0.0% (0/2)  p95=145ms HTTP 200
+
+── netwatch · 2026-10-30T19:13:47+00  (Ctrl+C — выход)
+ ● 1.1.1.1                        UP        [ icmp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/2)  p95=2ms
+ ● 8.8.8.8                        UP        [ icmp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/2)  p95=3ms
+ ● https://www.google.com         UP        [https] rtt=  135ms avg=   142ms jit=  13ms loss=  0.0% (0/2)  p95=148ms HTTP 200
+ ● https://one.one.one.one        UP        [https] rtt=  120ms avg=   133ms jit=  25ms loss=  0.0% (0/2)  p95=145ms HTTP 200
+
+── netwatch · 2026-10-30T19:13:49+00  (Ctrl+C — выход)
+ ● 1.1.1.1                        UP        [ icmp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/3)  p95=2ms
+ ● 8.8.8.8                        UP        [ icmp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/3)  p95=3ms
+ ● https://www.google.com         UP        [https] rtt=  135ms avg=   142ms jit=  13ms loss=  0.0% (0/2)  p95=148ms HTTP 200
+ ● https://one.one.one.one        UP        [https] rtt=  120ms avg=   133ms jit=  25ms loss=  0.0% (0/2)  p95=145ms HTTP 200
+
+[2026-10-30T19:13:49+00] INFO  [netwatch] Stopped
+
+Итоги:
+   ● 1.1.1.1                        UP        [ icmp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/3)  p95=2ms
+   ● 8.8.8.8                        UP        [ icmp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/3)  p95=3ms
+   ● https://www.google.com         UP        [https] rtt=  135ms avg=   142ms jit=  13ms loss=  0.0% (0/2)  p95=148ms HTTP 200
+   ● https://one.one.one.one        UP        [https] rtt=  120ms avg=   133ms jit=  25ms loss=  0.0% (0/2)  p95=145ms HTTP 200
