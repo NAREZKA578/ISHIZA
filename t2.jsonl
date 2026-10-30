@@ -1,0 +1,9 @@
+{"ts": "2026-10-30T19:11:31+00", "level": "INFO", "target": "netwatch", "kind": "start", "msg": "Watching 4 target(s): expired.almost.online, dns:does-not-exist-xyz42.example, https://nghttp2.org/httpbin/status/500, 8.8.8.8 | interval=2.0s timeout=3.0s warn=250.0ms"}
+{"ts": "2026-10-30T19:11:31+00", "level": "CRIT", "target": "expired.almost.online", "kind": "nxdomain", "msg": "DNS: домен НЕ СУЩЕСТВУЕТ (NXDOMAIN)"}
+{"ts": "2026-10-30T19:11:31+00", "level": "WARN", "target": "expired.almost.online", "kind": "diagnosis_fail", "msg": "traceroute не удался: nxdomain"}
+{"ts": "2026-10-30T19:11:31+00", "level": "CRIT", "target": "dns:does-not-exist-xyz42.example", "kind": "dns_nxdomain", "msg": "DNS: домен НЕ СУЩЕСТВУЕТ (NXDOMAIN)"}
+{"ts": "2026-10-30T19:11:32+00", "level": "WARN", "target": "https://nghttp2.org/httpbin/status/500", "kind": "http_5xx", "msg": "HTTP 5xx — серверная ошибка"}
+{"ts": "2026-10-30T19:11:33+00", "level": "CRIT", "target": "expired.almost.online", "kind": "down", "msg": "UNREACHABLE (nxdomain) | consec_fails=2 loss=100.0%", "error": "nxdomain", "total": 2, "failures": 2, "loss_pct": 100.0, "win_loss_pct": 100.0, "avg_ms": 0.0, "last_ms": null, "max_ms": 0.0, "p95_ms": null, "jitter_ms": null, "consec_fails": 2}
+{"ts": "2026-10-30T19:11:34+00", "level": "CRIT", "target": "dns:does-not-exist-xyz42.example", "kind": "down", "msg": "UNREACHABLE (dns_nxdomain) | consec_fails=2 loss=100.0%", "error": "dns_nxdomain", "total": 2, "failures": 2, "loss_pct": 100.0, "win_loss_pct": 100.0, "avg_ms": 0.0, "last_ms": null, "max_ms": 0.0, "p95_ms": null, "jitter_ms": null, "consec_fails": 2}
+{"ts": "2026-10-30T19:11:34+00", "level": "WARN", "target": "dns:does-not-exist-xyz42.example", "kind": "diagnosis_fail", "msg": "traceroute не удался: nxdomain"}
+{"ts": "2026-10-30T19:11:47+00", "level": "INFO", "target": "netwatch", "kind": "stop", "msg": "Stopped"}
