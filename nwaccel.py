@@ -19,10 +19,11 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-IS_SUPPORTED = platform.system() == "Linux"
+IS_SUPPORTED = platform.system() in ("Linux", "Windows")
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE / "nwaccel.c"
-_BIN_NAMES = ("nwaccel", "nwaccel.exe")
+_BIN_NAMES = ("nwaccel.exe", "nwaccel") if platform.system() == "Windows" \
+    else ("nwaccel", "nwaccel.exe")
 
 _lock = threading.Lock()
 _bin_cache: Optional[Path] = None
@@ -35,10 +36,11 @@ def find_binary() -> Optional[Path]:
     cands: List[Path] = []
     if env:
         cands.append(Path(env))
-    cands.append(_HERE / "nwaccel")
-    which = shutil.which("nwaccel")
-    if which:
-        cands.append(Path(which))
+    for name in _BIN_NAMES:
+        cands.append(_HERE / name)
+        which = shutil.which(name)
+        if which:
+            cands.append(Path(which))
     for p in cands:
         try:
             if p.is_file() and os.access(p, os.X_OK):
