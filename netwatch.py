@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
 import json
 import os
 import platform
 import re
+import shutil
 import socket
 import ssl
 import subprocess
@@ -1128,10 +1130,206 @@ def detect_env(timeout: float = 2.0) -> int:
 # CLI
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# netfix — полная очистка сетевого стека (Windows) / эквиваленты (Linux/macOS)
+#   netsh int ip reset ; netsh winsock reset ; ipconfig /flushdns ; ipconfig /renew
+# -----------------------------------------------------------------------------
+
+WIN_RESET_STEPS = [
+    ("ipconfig /flushdns", ["ipconfig", "/flushdns"], False),
+    ("netsh int ip reset", ["netsh", "int", "ip", "reset"], True),
+    ("netsh winsock reset", ["netsh", "winsock", "reset"], True),
+    ("ipconfig /release",  ["ipconfig", "/release"], True),
+    ("ipconfig /renew",    ["ipconfig", "/renew"], True),
+]
+
+
+def _is_admin_windows() -> bool:
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        # грубая страховка, если ctypes по какой-то причине недоступен
+        try:
+            out = subprocess.run(["net", "session"], capture_output=True).returncode
+            return out == 0
+        except Exception:
+            return False
+
+
+def run_step(title: str, cmd, shell: bool, dry_run: bool) -> Tuple[int, str]:
+    """Выполняет один шаг очистки. Возвращает (rc, текст вывода)."""
+    printable = title if not isinstance(cmd, list) else " ".join(cmd)
+    if dry_run:
+        print("  " + dim(f"[dry-run] {printable}"))
+        return 0, ""
+    try:
+        proc = subprocess.run(cmd, shell=shell, capture_output=True, text=True,
+                              timeout=60, encoding="utf-8", errors="replace")
+        out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        rc = proc.returncode
+    except FileNotFoundError:
+        out, rc = "команда не найдена", 127
+    except subprocess.TimeoutExpired:
+        out, rc = "таймаут 60с", 124
+    except Exception as e:                       # noqa: BLE001
+        out, rc = f"ошибка запуска: {e}", 1
+    status = ok("OK ") if rc == 0 else bad(f"rc={rc}")
+    print(f"  {status} {bold(printable)}")
+    for line in out.splitlines():
+        print("       " + dim(line))
+    return rc, out
+
+
+def netfix_win(dry_run: bool, reboot: bool) -> int:
+    admin = _is_admin_windows()
+    print(bold("netfix: полная очистка сетевого стека (Windows)"))
+    print(dim("  шаги: flushdns → netsh int ip reset → netsh winsock reset → "
+              "ipconfig /release → /renew"))
+    if not admin and not dry_run:
+        print(warn("  ⚠ Нет прав администратора: netsh int ip reset / winsock reset / "
+                   "ipconfig /renew\n    требуют запуска от администратора "
+                   "(«Запуск от имени администратора»)."))
+    failed = []
+    for title, cmd, needs_admin in WIN_RESET_STEPS:
+        if needs_admin and not admin and not dry_run:
+            print("  " + warn(f"skip {title} — нужны права администратора"))
+            failed.append(title)
+            continue
+        rc, _ = run_step(title, cmd, False, dry_run)
+        if rc != 0:
+            failed.append(title)
+    print()
+    if failed:
+        print(warn(f"Итог: выполнено с проблемами: {', '.join(failed)}"))
+    else:
+        print(ok("Все шаги выполнены."))
+        if not dry_run:
+            print(dim("Рекомендуется перезагрузка (winsock/стек применятся после неё), "
+                      "затем проверка: netwatch --detect"))
+    if reboot and not dry_run and admin:
+        print(warn("Перезагрузка через 15 секунд (shutdown /r /t 15)… Ctrl+C чтобы отменить.")
+              )
+        try:
+            time.sleep(15)
+            subprocess.run(["shutdown", "/r", "/t", "0"])
+        except KeyboardInterrupt:
+            print("\n" + dim("Перезагрузка отменена."))
+    return 1 if failed else 0
+
+
+def netfix_unix(dry_run: bool) -> int:
+    """Эквивалент «полной очистки» для Linux/macOS: сброс DNS-кэша, DHCP-обновление,
+    чистка ARP/neighbour кэшей, soft-flush маршрутов и очищаемых sysctl."""
+    system = platform.system()
+    print(bold(f"netfix: очистка сетевого стека ({system})"))
+    print(dim("  Windows-аналоги: flushdns→DNS-кэш, ipconfig /renew→DHCP, "
+              "winsock/int ip reset→sysctl/очереди"))
+    failed = []
+
+    euid = os.geteuid() if not dry_run else 0   # dry-run не требует прав
+    def sh(title: str, script: str, needs_root: bool = True):
+        if dry_run:
+            print("  " + dim(f"[dry-run] {title}: {script}"))
+            return 0
+        if needs_root and euid != 0:
+            print("  " + warn(f"skip {title} — нужен root (sudo)"))
+            failed.append(title)
+            return 1
+        proc = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+        rc = proc.returncode
+        status = ok("OK ") if rc == 0 else bad(f"rc={rc}")
+        print(f"  {status} {bold(title)}")
+        for line in ((proc.stdout or "") + (proc.stderr or "")).splitlines():
+            print("       " + dim(line))
+        if rc != 0:
+            failed.append(title)
+        return rc
+
+    # 1. DNS-кэш (аналог ipconfig /flushdns)
+    if shutil.which("resolvectl"):
+        sh("flush DNS cache (systemd-resolved)", "resolvectl flush-caches", False)
+    elif shutil.which("systemd-resolve"):
+        sh("flush DNS cache (systemd-resolve)", "systemd-resolve --flush-caches", False)
+    elif shutil.which("dnscacheutil"):           # macOS
+        sh("flush DNS cache (mDNSResponder)", "dscacheutil -flushcache; "
+                                              "killall -HUP mDNSResponder", False)
+    else:
+        print("  " + warn("DNS-кэш: ни resolvectl, ни dscacheutil не найдены — "
+                          "пропускаю (вероятно, кэша нет)"))
+
+    # 2. ARP / neighbour-кэш
+    if system == "Darwin":
+        sh("flush ARP cache", "arp -ad", True)
+    else:
+        sh("flush ARP/neighbour cache", "ip -s neigh flush all", True)
+
+    # 3. DHCP release/renew (аналог ipconfig /release + /renew)
+    iface = None
+    try:
+        route = subprocess.run(["ip", "route", "show", "default"],
+                               capture_output=True, text=True, timeout=5).stdout
+        m = re.search(r"\bdev\s+(\S+)", route)
+        if m:
+            iface = m.group(1)
+    except Exception:
+        pass
+    if system == "Darwin":
+        iface = iface or "en0"
+        sh(f"DHCP renew on {iface}",
+           f"ipconfig set {iface} BOOTP; ipconfig getifaddr {iface}", True)
+    elif iface:
+        nmcli = shutil.which("nmcli")
+        if nmcli:
+            sh(f"DHCP renew via NetworkManager ({iface})",
+               f"nmcli device reapply {iface} || nmcli device connect {iface}", True)
+        elif shutil.which("dhclient"):
+            sh(f"DHCP release+renew on {iface} (dhclient)",
+               f"dhclient -r {iface}; dhclient {iface}", True)
+        else:
+            sh(f"link bounce {iface} (fallback)",
+               f"ip link set {iface} down && sleep 1 && ip link set {iface} up", True)
+    else:
+        print("  " + warn("не удалось определить default-интерфейс — DHCP renew пропускаю"))
+
+    # 4. Сброс «winsock-подобного»: очищаемые sysctl/очереди/TW-сокеты
+    if system != "Darwin":
+        sh("drop packet queues & conntrack",
+           "tc qdisc del dev lo root 2>/dev/null; "
+           "conntrack -F 2>/dev/null || true", True)
+        sh("purge TIME_WAIT-ish sockets info & reset routing caches",
+           "ip route flush cache", True)
+    print()
+    if failed:
+        print(warn(f"выполнено с пропусками/ошибками: {', '.join(failed)}"))
+        return 1
+    print(ok("Очистка выполнена. Проверка: python3 netwatch.py --detect"))
+    return 0
+
+
+def cmd_netfix(args) -> int:
+    system = platform.system()
+    if args.dry_run:
+        print(dim("[dry-run] ничего не будет изменено\n"))
+    if system == "Windows":
+        return netfix_win(args.dry_run, args.reboot)
+    return netfix_unix(args.dry_run)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="netwatch", formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Монитор сетевых ошибок и проблем подключения.")
+    sub = p.add_subparsers(dest="command")
+    fx = sub.add_parser("fix", aliases=["netfix"],
+                        help="полная очистка сетевого стека "
+                             "(netsh int ip reset, netsh winsock reset, "
+                             "ipconfig /flushdns, ipconfig /renew)")
+    fx.add_argument("--reboot", action="store_true",
+                    help="Windows: перезагрузить сразу после очистки "
+                         "(winsock применяется только после reboot)")
+    fx.add_argument("--dry-run", action="store_true",
+                    help="показать команды, ничего не выполнять")
+    fx.set_defaults(func=cmd_netfix)
     p.add_argument("-t", "--targets", nargs="+", metavar="SPEC",
                    help="8.8.8.8 | example.com | host:443 | https://site | alias:host:443")
     p.add_argument("-c", "--config", type=Path, help="INI/TOML-конфиг с [[target]] секциями")
@@ -1160,7 +1358,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--jitter-warn-ms", type=float, default=80.0,
                    help="порог тревоги по джиттеру [80]")
     g.add_argument("--loss-warn-pct", type=float, default=20.0,
-                   help="порог % потерь в окне для packet_loss [20]")
+                   help="порог %% потерь в окне для packet_loss [20]")
     g.add_argument("--diag-every", type=float, default=0.0, metavar="SEC",
                    help="периодический traceroute (нужен root), 0=только при DOWN")
     g.add_argument("--detect", action="store_true",
@@ -1179,6 +1377,10 @@ CSV_FIELDS = ["ts", "target", "state", "rtt_ms", "error", "total", "failures",
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+
+    # подкоманда netwatch fix — полная очистка сетевого стека
+    if getattr(args, "command", None):
+        return args.func(args)
 
     if args.detect:
         return detect_env(args.timeout)

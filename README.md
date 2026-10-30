@@ -83,3 +83,28 @@ WantedBy=multi-user.target
 скользящее окно считает потери/jitter; машина состояний UP/DEGRADED/DOWN генерирует
 события только на переходах. Отдельный `RouteMonitor` следит за таблицей маршрутизации —
 это позволяет различить «лёг хост» от «лег весь канал/провайдер».
+
+## netwatch fix — полная очистка сетевого стека
+
+Запускает каноничный набор Windows-команд (от администратора):
+
+```bat
+netsh int ip reset
+netsh winsock reset
+ipconfig /flushdns
+ipconfig /renew
+```
+
+```bash
+python3 netwatch.py fix              # = netfix; требует прав админа для netsh/renew
+python3 netwatch.py fix --dry-run    # показать команды без выполнения
+python3 netwatch.py fix --reboot     # перезагрузить сразу после очистки
+```
+
+Порядок шагов: `flushdns → int ip reset → winsock reset → release → renew`.
+Без админ-прав dangerous-шаги помечаются skip (rc=1), чтобы ты видел, что не применилось.
+После winsock reset **нужна перезагрузка** — иначе новый LSP-стек не подхватится.
+
+На Linux/macOS subcomand делает эквиваленты: сброс DNS-кэша (`resolvectl`/`dscacheutil`),
+чистка ARP/neighbour-кэша, DHCP release+renew default-интерфейса (`nmcli`/`dhclient`/link bounce),
+флэш кэша маршрутов и conntrack. После — проверка `python3 netwatch.py --detect`.
