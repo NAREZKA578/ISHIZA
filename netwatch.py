@@ -49,6 +49,15 @@ try:
 except Exception:                  # библиотека потеряна — работаем в режиме v1
     P = None
 
+try:
+    import nwaccel as A            # C-ядро: flood-ping + пакетный DNS (опционально)
+except Exception:
+    A = None
+
+# Глобальные настройки C-ядра (включает main() при --c-core / --c-build).
+ACCEL = {"on": False, "interval_ms": 100, "sockets": 1}
+
+
 # -----------------------------------------------------------------------------
 # Цветной вывод
 # -----------------------------------------------------------------------------
@@ -609,7 +618,25 @@ class Prober(threading.Thread):
                 self.last_detail = extra.get("cipher", "") or ""
                 return ms, err
             return tcp_connect(cfg.host, cfg.port, cfg.timeout)
-        # ICMP-цель: сырой пинг быстрее и точнее по RTT (если включён NW_ICMP=1 и есть root)
+        # ICMP-цель. Приоритет: C-ядро (--c-core: flood-ping, mdev/p50/p95) →
+        # raw Python (NW_ICMP=1) → /bin/ping → TCP-фолбэк.
+        if ACCEL["on"] and not self._icmp_blocked and A is not None:
+            d = A.c_ping(cfg.host, count=max(2, int(os.environ.get("NW_C_PING_N", "4"))),
+                         interval_ms=ACCEL["interval_ms"],
+                         timeout=cfg.timeout + 1,
+                         sockets=ACCEL["sockets"])
+            if d is not None:
+                if d.get("received"):
+                    self.last_detail = (f"C-core: avg={d['avg_ms']:.2f}ms "
+                                        f"mdev={d['mdev_ms']:.2f} p95={d['p95_ms']:.2f} "
+                                        f"loss={d['loss_pct']:.0f}% "
+                                        f"({d['received']}/{d['sent']})")
+                    return d["avg_ms"], None
+                return None, d.get("error") or "no_icmp_reply"
+            ACCEL["on"] = False   # бинарь/raw-сокеты недоступны — откат на Python
+            self.bus.emit("INFO", cfg.name, "accel_disabled",
+                          "C-ядро недоступно (нет root/CAP_NET_RAW?) — "
+                          "фолбэк на Python-ping", rate_limit=600)
         if P is not None and os.environ.get("NW_ICMP") == "1" and not self._icmp_blocked:
             reps, perr, got = P.raw_icmp_ping(cfg.host, count=1, timeout=cfg.timeout)
             if perr == "raw_not_allowed":
@@ -1315,6 +1342,37 @@ def cmd_netfix(args) -> int:
     return netfix_unix(args.dry_run)
 
 
+def cmd_accel(args) -> int:
+    """Подкоманда accel: собрать/проверить C-ядро nwaccel."""
+    if A is None:
+        print(bad("nwaccel.py потерян рядом с netwatch.py"), file=sys.stderr)
+        return 2
+    st = A.engine_status(auto_build=args.build)
+    print(bold("C-ядро netwatch (nwaccel):"))
+    print(f"  платформа поддерживается : {st['platform_ok']}")
+    print(f"  бинарь                   : {st['binary'] or '-'}")
+    print(f"  статус                   : {st['status']}"
+          + (" (собран сейчас)" if st["built_now"] else ""))
+    print(f"  raw-ICMP доступен        : {st['icmp_usable']} "
+          "(нужен root/CAP_NET_RAW)")
+    if st["status"] != "ready":
+        print(dim("  сборка: python3 netwatch.py accel --build   "
+                  "(или gcc -O2 -pthread -o nwaccel nwaccel.c)"))
+        return 1
+    if st["icmp_usable"]:
+        d = A.c_ping("127.0.0.1", count=20, interval_ms=5)
+        if d:
+            print(ok(f"  ping self-test: sent={d['sent']} recv={d['received']} "
+                     f"avg={d['avg_ms']:.3f}ms mdev={d['mdev_ms']:.3f}ms"))
+    dns = A.c_dns_resolve_many(["example.com", "one.one.one.one",
+                                "invalid-host-nwtest.invalid"])
+    if dns:
+        bad_hosts = [h for h, r in dns.items() if not r.get("ok")]
+        print(ok(f"  dns self-test: {len(dns)} хостов за один вызов, "
+                 f"фейлы как ожидалось: {bad_hosts}"))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="netwatch", formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1330,6 +1388,22 @@ def build_parser() -> argparse.ArgumentParser:
     fx.add_argument("--dry-run", action="store_true",
                     help="показать команды, ничего не выполнять")
     fx.set_defaults(func=cmd_netfix)
+    ac = sub.add_parser("accel", aliases=["ccore"],
+                        help="собрать/проверить C-ядро nwaccel "
+                             "(flood-ping, пакетный DNS)")
+    ac.add_argument("--build", action="store_true",
+                    help="скомпилировать nwaccel.c через gcc/cc (-O2 -pthread)")
+    ac.set_defaults(func=cmd_accel)
+    ca = p.add_argument_group("C-ядро (ускорение)")
+    ca.add_argument("--c-core", action="store_true",
+                    help="ICMP-пробы через C-ядро: flood-ping с mdev/p50/p95 "
+                         "(нужен собранный nwaccel + root; иначе фолбэк на Python)")
+    ca.add_argument("--c-build", action="store_true",
+                    help="автосборка nwaccel.c при старте, если бинаря нет")
+    ca.add_argument("--ping-samples", type=int, default=4, metavar="N",
+                    help="ICMP-эхо на одну пробу в C-ядре [4]")
+    ca.add_argument("--ping-rate-ms", type=int, default=100, metavar="MS",
+                    help="интервал между эхо внутри пробы [100]")
     p.add_argument("-t", "--targets", nargs="+", metavar="SPEC",
                    help="8.8.8.8 | example.com | host:443 | https://site | alias:host:443")
     p.add_argument("-c", "--config", type=Path, help="INI/TOML-конфиг с [[target]] секциями")
@@ -1381,6 +1455,25 @@ def main(argv=None) -> int:
     # подкоманда netwatch fix — полная очистка сетевого стека
     if getattr(args, "command", None):
         return args.func(args)
+
+    # --- C-ядро: включаем по флагу, при --c-build собираем на лету ---
+    if A is not None and (args.c_core or args.c_build):
+        st = A.engine_status(auto_build=args.c_build or args.c_core)
+        if st["status"] == "ready":
+            ACCEL["on"] = True
+            ACCEL["interval_ms"] = max(10, args.ping_rate_ms)
+            ACCEL["sockets"] = 2 if args.ping_samples > 8 else 1
+            os.environ["NW_C_PING_N"] = str(max(2, args.ping_samples))
+            msg = f"C-ядро: {st['binary']}"
+            if st["built_now"]:
+                msg += " (собрано сейчас)"
+            if not st["icmp_usable"]:
+                msg += (" — ВНИМАНИЕ: raw-ICMP недоступен (нужен root), "
+                        "работает фолбэк на Python-ping")
+            print(dim(msg))
+        else:
+            print(warn("C-ядро недоступно: нет бинаря/компилятора — "
+                       "работаю на Python"))
 
     if args.detect:
         return detect_env(args.timeout)
