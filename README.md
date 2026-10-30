@@ -105,6 +105,6 @@ python3 netwatch.py fix --reboot     # перезагрузить сразу п�
 Без админ-прав dangerous-шаги помечаются skip (rc=1), чтобы ты видел, что не применилось.
 После winsock reset **нужна перезагрузка** — иначе новый LSP-стек не подхватится.
 
-На Linux/macOS subcomand делает эквиваленты: сброс DNS-кэша (`resolvectl`/`dscacheutil`),
+На Linux/macOS subcommand делает эквиваленты: сброс DNS-кэша (`resolvectl`/`dscacheutil`),
 чистка ARP/neighbour-кэша, DHCP release+renew default-интерфейса (`nmcli`/`dhclient`/link bounce),
 флэш кэша маршрутов и conntrack. После — проверка `python3 netwatch.py --detect`.
