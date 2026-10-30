@@ -24,4 +24,4 @@ name = "postgres"
 host = "db.internal"        # TCP-хендшейк к порту
 port = 5432
 interval = 5
-fails_to_down = 3           # сколько фейлов подряд = DOWN
+fails_to_down = 2           # сколько фейлов подряд = DOWN
