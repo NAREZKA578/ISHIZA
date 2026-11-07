@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import csv
 import ctypes
+import struct
 import json
 import os
 import platform
@@ -965,6 +966,7 @@ def dashboard_loop(probers: List[Prober], routes: RouteMonitor,
 def load_config(path: Path, defaults: TargetConfig) -> List[TargetConfig]:
     targets: List[TargetConfig] = []
     section = None
+    section_name = None
     kv: dict = {}
 
     def flush():
@@ -977,6 +979,8 @@ def load_config(path: Path, defaults: TargetConfig) -> List[TargetConfig]:
             sub = parse_target(kv["target"], defaults)
             if kv.get("name"):
                 sub.name = kv["name"]
+            elif section_name:
+                sub.name = section_name
             for fnum in ("interval", "timeout", "latency_warn_ms",
                          "jitter_warn_ms", "loss_warn_pct"):
                 if kv.get(fnum):
@@ -998,10 +1002,17 @@ def load_config(path: Path, defaults: TargetConfig) -> List[TargetConfig]:
             return
         # классическая форма host=/url=
         if kv.get("host") or kv.get("url"):
-            t = TargetConfig(name=kv.get("name") or kv.get("host") or kv.get("url"))
+            t = TargetConfig(name=(kv.get("name") or section_name
+                                   or kv.get("host") or kv.get("url")))
             t.host = kv.get("host")
             t.url = kv.get("url")
             t.port = int(kv["port"]) if kv.get("port") else None
+            if t.url and not kv.get("mode"):
+                pr = urllib.parse.urlparse(t.url)
+                t.host = t.host or pr.hostname
+                if pr.scheme in ("http", "https"):
+                    t.mode = pr.scheme
+                    t.port = t.port or (443 if pr.scheme == "https" else 80)
             for fnum in ("interval", "timeout", "latency_warn_ms"):
                 if kv.get(fnum):
                     setattr(t, fnum, float(kv[fnum]))
@@ -1027,12 +1038,19 @@ def load_config(path: Path, defaults: TargetConfig) -> List[TargetConfig]:
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
-        m = re.match(r'\[\s*(\w+)(?:\s+"[^"]*")?\s*\]\s*$', line)   # [target] / [target "имя"] / [[target]]
+        m = re.match(r'\[\[?\s*(\w+)(?:\s+"([^"]*)")?\s*\]?\]\s*$', line)  # [x] / [[x]] / [x "имя"]
         if m:
             flush()
-            section = m.group(1)
+            section, section_name = m.group(1), m.group(2)
             continue
-        m = re.match(r'^(\w+)\s*=\s*"?([^"]*)"?\s*$', line)
+        m = re.match(r'\[[ \t]*(\w+)[ \t]*\][ \t]*$', line)   # классический INI-заголовок
+        if m:
+            flush()
+            section, section_name = m.group(1), None
+            continue
+        m = re.match(r'^(\w+)[ \t]*=[ \t]*"([^"]*)"[ \t]*$', line)   # toml: key = "value"
+        if not m:
+            m = re.match(r'^(\w+)[ \t]*=[ \t]*([^;]+?)[ \t]*$', line)   # ini/toml: key = value (без кавычек)
         if m and section == "target":
             kv[m.group(1)] = m.group(2)
         elif m and section == "defaults" and m.group(1) in (
@@ -1373,6 +1391,183 @@ def cmd_accel(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- selftest --
+def cmd_selftest(args) -> int:
+    """Оффлайновые unit-тесты парсеров/статистики/интеграции C-ядра.
+
+    Сеть не требуется (кроме пары быстрых DNS/TCP-проб на localhost).
+    Возвращает число проваленных тестов — build.bat использует это как gate.
+    """
+    fails = []
+
+    def check(name, fn):
+        try:
+            fn()
+            print(ok(f"  [PASS] {name}"))
+        except Exception as e:
+            fails.append(name)
+            print(bad(f"  [FAIL] {name}: {type(e).__name__}: {e}"))
+
+    dflt = TargetConfig(name="")
+
+    # --- парсер целей ---
+    def t_parse_ip():
+        t = parse_target("8.8.8.8", dflt)
+        assert t.host == "8.8.8.8" and t.mode == "auto", (t.host, t.mode)
+
+    def t_parse_hostport():
+        t = parse_target("db:localhost:5432", dflt)
+        assert t.name == "db" and t.host == "localhost" and t.port == 5432, vars(t)
+
+    def t_parse_url():
+        t = parse_target("https://example.com/health", dflt)
+        assert t.mode == "https" and t.host == "example.com", vars(t)
+
+    def t_parse_mode_tls():
+        t = parse_target("tls:one.one.one.one:443", dflt)
+        assert t.mode == "tls" and t.host == "one.one.one.one" and t.port == 443, vars(t)
+
+    def t_parse_dns_at_server():
+        t = parse_target("dns:example.com@9.9.9.9", dflt)
+        assert t.mode == "dns" and t.dns_server == "9.9.9.9", vars(t)
+
+    # --- Stats: скользящее окно, потери, джиттер, перцентили ---
+    def t_stats():
+        s = Stats(window=10)
+        for ms in [10, 12, 11, 50, None, 13, 14, None, 15]:
+            s.add(ms)
+        snap = s.snapshot()
+        assert snap["total"] == 9 and snap["failures"] == 2, snap
+        assert abs(s.win_loss_pct - 100.0 * 2 / 9) < 0.1, s.win_loss_pct
+        assert s.avg_rtt > 0 and s.percentile(95) is not None, s.rtts
+        assert s.jitter is not None, "джиттер не посчитан"
+
+    def t_stats_consec():
+        s = Stats(window=5)
+        s.add(10); s.add(None); s.add(None)
+        assert s.consec_fails == 2, s.consec_fails
+        s.add(11)
+        assert s.consec_fails == 0, s.consec_fails
+
+    # --- Baseline EWMA ---
+    def t_baseline():
+        b = Baseline(alpha=0.25, k=4.0, min_abs_ms=50.0)
+        for _ in range(30):
+            anomaly, _desc = b.update(100.0)
+        assert b.ready and b.mean is not None and 90 < b.mean < 110, b.mean
+        anomaly, desc = b.update(900.0)
+        assert anomaly and "SPIKE" in desc, (anomaly, desc)
+        anomaly, _ = b.update(102.0)
+        assert not anomaly, "норма не должна быть аномалией"
+
+    # --- конфиг INI + TOML-пример ---
+    def t_cfg_ini():
+        with open("/tmp/nw-selftest.ini", "w") as f:
+            f.write("[defaults]\ninterval = 7\nlatency_warn_ms = 300\n\n"
+                    "[target \"gw\"]\ntarget = 192.168.1.1\n\n"
+                    "[target \"db\"]\nhost = localhost\nport = 5432\n")
+        ts = load_config(Path("/tmp/nw-selftest.ini"), TargetConfig(name=""))
+        assert len(ts) == 2, ts
+        by = {t.name: t for t in ts}
+        assert by["db"].port == 5432 and by["gw"].host == "192.168.1.1", by
+        assert by["gw"].interval == 7.0, "defaults не применились"
+
+    def t_cfg_toml():
+        src = Path(__file__).with_name("netwatch.toml")
+        if not src.exists():
+            return
+        ts = load_config(src, TargetConfig(name=""))
+        assert len(ts) == 4, [t.name for t in ts]
+        by = {t.name: t for t in ts}
+        assert by["my-site"].mode == "https" and by["postgres"].port == 5432, by
+
+    # --- репортер по синтетическому логу ---
+    def t_report():
+        p = Path("/tmp/nw-selftest.jsonl")
+        p.write_text(
+            json.dumps({"ts": "2026-01-01T00:00:00+00", "target": "a",
+                        "level": "WARN", "event": "latency_spike"}) + "\n" +
+            json.dumps({"ts": "2026-01-01T00:00:05+00", "target": "a",
+                        "level": "CRIT", "event": "down"}) + "\n" +
+            "{broken line}\n", encoding="utf-8")  # битая строка должна молча пропускаться
+        rc = report(p)
+        assert rc in (None, 0, 1), rc
+
+    # --- netfix dry-run (ничего не выполняем) ---
+    def t_fix_dryrun():
+        ns = argparse.Namespace(dry_run=True, reboot=False)
+        rc = cmd_netfix(ns)
+        assert rc in (0, 1), rc  # dry-run не имеет права падать в стектрейс
+
+    # --- nw_probes: DNS-пакет, TCP на закрытый порт, raw-ICMP graceful ---
+    def t_probe_dns_packet():
+        # проверка формата DNS-запроса (RD-бит, длина) без зависимости от сервера
+        name = b"".join(bytes([len(l)]) + l.encode() for l in ("example", "com")) + b"\x00"
+        hdr = struct.pack(">HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0)
+        pkt = hdr + name + struct.pack(">HH", 1, 1)
+        assert pkt[2:4] == b"\x01\x00", "RD-бит должен стоять"
+        assert len(pkt) == 12 + len(name) + 4
+
+    def t_probe_tcp_refused():
+        import nw_probes as NP
+        s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+        res = NP.tcp_probe("127.0.0.1", port, 1.0)
+        rtt, err = res[0], res[1]
+        assert err and rtt is None, (rtt, err)
+
+    def t_probe_icmp_perm():
+        import nw_probes as NP
+        try:
+            r = NP.raw_icmp_ping("127.0.0.1", count=1, timeout=0.5)
+        except PermissionError:
+            r = None
+        assert r is None or isinstance(r, (tuple, dict, float)), r
+
+    # --- C-ядро: контракт CLI + JSON через Python-обвязку ---
+    def t_accel_contract():
+        if A is None:
+            return
+        st = A.engine_status(auto_build=False)
+        if st["status"] != "ready":
+            print(dim("  [SKIP] nwaccel не собран (build.bat / accel --build)"))
+            return
+        binary = Path(st["binary"])
+        for flag in ("--count", "--interval"):
+            r = subprocess.run([str(binary), "ping", "127.0.0.1", flag, "1"],
+                               capture_output=True, text=True, timeout=20)
+            assert "unknown opt" not in (r.stderr + r.stdout), \
+                f"C-ядро не понимает {flag} — бинарь устарел относительно исходников"
+        dns = A.c_dns_resolve_many(["localhost", "invalid-host-nwtest.invalid"])
+        if dns is not None:
+            assert dns.get("localhost", {}).get("ok") is True, dns
+            assert dns.get("invalid-host-nwtest.invalid", {}).get("ok") is False, dns
+
+    print(bold("netwatch selftest:"))
+    check("parse: ip", t_parse_ip)
+    check("parse: alias:host:port", t_parse_hostport)
+    check("parse: https url", t_parse_url)
+    check("parse: tls mode", t_parse_mode_tls)
+    check("parse: dns@server", t_parse_dns_at_server)
+    check("stats: window/loss/jitter", t_stats)
+    check("stats: consec_fails", t_stats_consec)
+    check("baseline: EWMA anomaly", t_baseline)
+    check("config: INI", t_cfg_ini)
+    check("config: netwatch.toml", t_cfg_toml)
+    check("report: jsonl (+битые строки)", t_report)
+    check("fix: dry-run", t_fix_dryrun)
+    check("probes: dns packet", t_probe_dns_packet)
+    check("probes: tcp refused", t_probe_tcp_refused)
+    check("probes: raw icmp graceful", t_probe_icmp_perm)
+    check("accel: CLI contract", t_accel_contract)
+
+    total = 16
+    if fails:
+        print(bad(f"\n{len(fails)}/{total} провалено: {', '.join(fails)}"))
+    else:
+        print(ok(f"\nВсе {total} тестов зелёные."))
+    return len(fails)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="netwatch", formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1394,6 +1589,9 @@ def build_parser() -> argparse.ArgumentParser:
     ac.add_argument("--build", action="store_true",
                     help="скомпилировать nwaccel.c через gcc/cc (-O2 -pthread)")
     ac.set_defaults(func=cmd_accel)
+    stp = sub.add_parser("selftest", aliases=["test"],
+                         help="оффлайновые unit-тесты (используется build.bat)")
+    stp.set_defaults(func=cmd_selftest)
     ca = p.add_argument_group("C-ядро (ускорение)")
     ca.add_argument("--c-core", action="store_true",
                     help="ICMP-пробы через C-ядро: flood-ping с mdev/p50/p95 "
