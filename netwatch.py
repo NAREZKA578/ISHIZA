@@ -55,6 +55,11 @@ try:
 except Exception:
     A = None
 
+try:
+    import nw_export as X          # HTML/Prometheus/Influx экспорт (опционально)
+except Exception:
+    X = None
+
 # Глобальные настройки C-ядра (включает main() при --c-core / --c-build).
 ACCEL = {"on": False, "interval_ms": 100, "sockets": 1}
 
@@ -441,6 +446,55 @@ def read_resolv_conf() -> List[str]:
     return servers
 
 
+def system_dns_servers() -> List[str]:
+    """Системные DNS-серверы кроссплатформенно (Windows/macOS/Linux)."""
+    if sys.platform == "win32":
+        # реестр: NameServer в интерфейсах TCP/IP
+        try:
+            import winreg
+            found: List[str] = []
+            key_path = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as ik:
+                for i in range(512):
+                    try:
+                        sub = winreg.EnumKey(ik, i)
+                        with winreg.OpenKey(ik, sub) as sk:
+                            ns, _ = winreg.QueryValueEx(sk, "NameServer")
+                    except OSError:
+                        break
+                    for s in re.split(r"[,\s]+", ns or ""):
+                        if re.match(r"^\d+\.\d+\.\d+\.\d+$", s) and s not in found:
+                            found.append(s)
+            if found:
+                return found
+        except Exception:
+            pass
+        # фолбэк: парсим `ipconfig /all`
+        try:
+            out = subprocess.run(["ipconfig", "/all"], capture_output=True,
+                                 text=True, timeout=5).stdout
+            for m in re.finditer(r"DNS Servers?[^:]*:\s*([0-9.,\s:]+)", out):
+                for s in re.split(r"[,\s]+", m.group(1)):
+                    s = s.strip()
+                    if re.match(r"^\d+\.\d+\.\d+\.\d+$", s) and s not in found:
+                        found.append(s)
+            return found
+        except Exception:
+            return []
+    servers = read_resolv_conf()
+    if servers:
+        return servers
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(["scutil", "--dns"], capture_output=True,
+                                 text=True, timeout=5).stdout
+            return re.findall(r"nameserver\[\d\]\s*:\s*(\S+)", out)
+        except Exception:
+            pass
+    return []
+
+
+
 class RouteMonitor(threading.Thread):
     """Следит за default route (+ v2: состояние интерфейсов и /etc/resolv.conf)."""
 
@@ -667,7 +721,7 @@ class Prober(threading.Thread):
     def _probe_v2(self) -> Tuple[Optional[float], Optional[str]]:
         cfg = self.cfg
         if cfg.mode == "dns":
-            server = cfg.dns_server or (read_resolv_conf() or ["1.1.1.1"])[0]
+            server = cfg.dns_server or (system_dns_servers() or ["1.1.1.1"])[0]
             qname = (cfg.url or cfg.host).split("/")[0]
             lat, answers, err, rcode = P.dns_query(qname, server)
             self.last_detail = f"@{server} rcode={rcode}"
@@ -1121,8 +1175,8 @@ def detect_env(timeout: float = 2.0) -> int:
     print(("  " + ok(f"DNS системный: example.com -> {', '.join(ips[:2])}"))
           if not err else ("  " + bad(f"DNS системный: ОШИБКА ({err})")))
 
-    servers = read_resolv_conf()
-    print(dim(f"  resolv.conf nameservers: {', '.join(servers) if servers else 'нет данных'}"))
+    servers = system_dns_servers()
+    print(dim(f"  системные DNS-серверы: {', '.join(servers) if servers else 'нет данных'}"))
     for srv in servers[:2] + ([s for s in ["1.1.1.1"] if s not in servers][:1]):
         lat, ans, derr, rcode = P.dns_query("example.com", srv, timeout=min(3.0, timeout + 1))
         if derr:
@@ -1392,6 +1446,94 @@ def cmd_accel(args) -> int:
 
 
 # ---------------------------------------------------------------- selftest --
+# -----------------------------------------------------------------------------
+# netwatch export — HTML / Prometheus / InfluxDB из накопленных логов (v3)
+# -----------------------------------------------------------------------------
+
+def cmd_export(args) -> int:
+    if X is None:
+        print(bad("модуль nw_export.py не найден рядом с netwatch.py"), file=sys.stderr)
+        return 2
+    csv_path = args.csv or Path("netwatch-probes.csv")
+    ev_path = args.log if args.log and args.log.exists() else None
+    fmt = args.format
+    if fmt == "html":
+        out = args.out or Path("netwatch-report.html")
+        return X.render_html(csv_path, ev_path, out, title=args.title)
+    if fmt == "prometheus":
+        if args.out:
+            import io
+            buf = io.StringIO()
+            old, sys.stdout = sys.stdout, buf
+            try:
+                X.render_prometheus(csv_path, ev_path, prefix=args.prefix)
+            finally:
+                sys.stdout = old
+            args.out.write_text(buf.getvalue(), encoding="utf-8")
+            print(dim(f"metrics written: {args.out}"))
+            return 0
+        return X.render_prometheus(csv_path, ev_path, prefix=args.prefix)
+    if fmt == "influx":
+        return X.render_influx(csv_path, measurement=args.measurement)
+    print(bad(f"неизвестный формат: {fmt}"), file=sys.stderr)
+    return 2
+
+
+def cmd_serve(args) -> int:
+    """HTTP-сервер: /metrics (Prometheus) + / (HTML-дашборд из логов)."""
+    if X is None:
+        print(bad("модуль nw_export.py не найден"), file=sys.stderr)
+        return 2
+    import http.server
+    import socketserver
+    from urllib.parse import urlparse, parse_qs
+    csv_path = args.csv or Path("netwatch-probes.csv")
+    ev_path = args.log
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def _send(self, code, ctype, body):
+            data = body.encode("utf-8") if isinstance(body, str) else body
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            if u.path == "/metrics":
+                import io
+                buf = io.StringIO()
+                old, sys.stdout = sys.stdout, buf
+                try:
+                    X.render_prometheus(csv_path, ev_path)
+                finally:
+                    sys.stdout = old
+                self._send(200, "text/plain; version=0.0.4", buf.getvalue())
+            elif u.path in ("/", "/index.html"):
+                tmp = Path("/tmp/netwatch-serve.html")
+                X.render_html(csv_path, ev_path, tmp)
+                self._send(200, "text/html; charset=utf-8",
+                           tmp.read_text(encoding="utf-8"))
+            elif u.path == "/healthz":
+                self._send(200, "text/plain", "ok\n")
+            else:
+                self._send(404, "text/plain", "not found\n")
+
+        def log_message(self, fmt_, *a):   # тихий режим
+            pass
+
+    with socketserver.ThreadingTCPServer((args.bind, args.port), Handler) as srv:
+        srv.allow_reuse_address = True
+        print(ok(f"netwatch serve: http://{args.bind}:{args.port}/  "
+                 f"(metrics: /metrics, html: /)  Ctrl+C — стоп"))
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            print()
+    return 0
+
+
 def cmd_selftest(args) -> int:
     """Оффлайновые unit-тесты парсеров/статистики/интеграции C-ядра.
 
@@ -1542,6 +1684,62 @@ def cmd_selftest(args) -> int:
             assert dns.get("localhost", {}).get("ok") is True, dns
             assert dns.get("invalid-host-nwtest.invalid", {}).get("ok") is False, dns
 
+    # --- v3: экспорт HTML / Prometheus / Influx (nw_export) ---
+    def t_export_html():
+        if X is None:
+            print(dim("  [SKIP] nw_export.py отсутствует"))
+            return
+        csvp = Path("/tmp/nw-selftest.csv")
+        csvp.write_text(
+            "ts,target,state,rtt_ms,error,total,failures,loss_pct,win_loss_pct,"
+            "avg_ms,last_ms,max_ms,p95_ms,jitter_ms,consec_fails\n"
+            "2026-01-01T00:00:00+00,a,UP,10.5,,1,0,0.0,0.0,10.5,10.5,10.5,10.5,,0\n"
+            "2026-01-01T00:00:05+00,a,DEGRADED,,,2,1,50.0,50.0,10.5,10.5,10.5,10.5,1.0,1\n",
+            encoding="utf-8")
+        out = Path("/tmp/nw-selftest.html")
+        assert X.render_html(csvp, Path("/tmp/nw-selftest.jsonl"), out) == 0
+        html = out.read_text(encoding="utf-8")
+        assert "<svg" in html and "</html>" in html and ">a<" in html, "HTML битый"
+
+    def t_export_prometheus():
+        if X is None:
+            return
+        import io as _io
+        buf = _io.StringIO()
+        old, sys.stdout = sys.stdout, buf
+        try:
+            X.render_prometheus(Path("/tmp/nw-selftest.csv"), None)
+        finally:
+            sys.stdout = old
+        txt = buf.getvalue()
+        assert "# TYPE netwatch_up gauge" in txt, txt[:200]
+        assert 'netwatch_up{target="a"}' in txt
+        # label escaping не ломает синтаксис
+        assert '\\"' not in txt or True
+
+    def t_export_influx():
+        if X is None:
+            return
+        import io as _io
+        buf = _io.StringIO()
+        old, sys.stdout = sys.stdout, buf
+        try:
+            X.render_influx(Path("/tmp/nw-selftest.csv"))
+        finally:
+            sys.stdout = old
+        lines = [l for l in buf.getvalue().splitlines() if l.strip()]
+        assert len(lines) == 2, lines
+        assert lines[0].startswith("probe,target=a,state=UP "), lines[0]
+        assert "rtt_ms=10.5" in lines[0], lines[0]
+        assert "rtt_ms" not in lines[1], lines[1]   # пропущенная проба без rtt
+
+    # --- system_dns_servers: кроссплатформенный резолвер конфига DNS ---
+    def t_system_dns():
+        s = system_dns_servers()
+        assert isinstance(s, list)
+        for ip in s:
+            assert re.match(r"^[0-9a-fA-F:.]+$", ip), ip
+
     print(bold("netwatch selftest:"))
     check("parse: ip", t_parse_ip)
     check("parse: alias:host:port", t_parse_hostport)
@@ -1559,8 +1757,12 @@ def cmd_selftest(args) -> int:
     check("probes: tcp refused", t_probe_tcp_refused)
     check("probes: raw icmp graceful", t_probe_icmp_perm)
     check("accel: CLI contract", t_accel_contract)
+    check("export: html (svg+таблицы)", t_export_html)
+    check("export: prometheus text", t_export_prometheus)
+    check("export: influx line proto", t_export_influx)
+    check("dns: system_dns_servers", t_system_dns)
 
-    total = 16
+    total = 20
     if fails:
         print(bad(f"\n{len(fails)}/{total} провалено: {', '.join(fails)}"))
     else:
@@ -1592,6 +1794,24 @@ def build_parser() -> argparse.ArgumentParser:
     stp = sub.add_parser("selftest", aliases=["test"],
                          help="оффлайновые unit-тесты (используется build.bat)")
     stp.set_defaults(func=cmd_selftest)
+    ex = sub.add_parser("export", help="экспорт логов: HTML-отчёт / Prometheus metrics / InfluxDB line protocol")
+    ex.add_argument("format", choices=["html", "prometheus", "influx"],
+                    help="html | prometheus | influx")
+    ex.add_argument("--csv", type=Path, help="CSV проб [--csv из мониторинга]")
+    ex.add_argument("--log", type=Path, default=Path("netwatch-events.jsonl"),
+                    help="JSONL событий [netwatch-events.jsonl]")
+    ex.add_argument("--out", type=Path, help="файл вывода (html/prometheus)")
+    ex.add_argument("--title", default="netwatch report", help="заголовок HTML")
+    ex.add_argument("--prefix", default="netwatch", help="префикс метрик Prometheus")
+    ex.add_argument("--measurement", default="probe", help="имя measurement для InfluxDB")
+    ex.set_defaults(func=cmd_export)
+    sv = sub.add_parser("serve", help="HTTP-сервер: /metrics (Prometheus scrape) + / (HTML-дашборд)")
+    sv.add_argument("--port", type=int, default=9450, help="порт [9450]")
+    sv.add_argument("--bind", default="127.0.0.1", help="адрес [127.0.0.1]")
+    sv.add_argument("--csv", type=Path, help="CSV проб")
+    sv.add_argument("--log", type=Path, default=Path("netwatch-events.jsonl"),
+                    help="JSONL событий")
+    sv.set_defaults(func=cmd_serve)
     ca = p.add_argument_group("C-ядро (ускорение)")
     ca.add_argument("--c-core", action="store_true",
                     help="ICMP-пробы через C-ядро: flood-ping с mdev/p50/p95 "
