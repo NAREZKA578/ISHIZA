@@ -1,0 +1,27 @@
+# netwatch.toml — пример конфигурации
+# Запуск:  python3 netwatch.py --config netwatch.toml --dashboard
+
+[[target]]
+name = "cloudflare-dns"
+host = "1.1.1.1"            # ICMP-пинг (с автофолбэком на TCP:53, если ICMP режут)
+interval = 5                # сек между пробами
+timeout = 2                 # таймаут пробы
+latency_warn_ms = 100       # порог DEGRADED
+
+[[target]]
+name = "google-dns"
+host = "8.8.8.8"
+interval = 5
+
+[[target]]
+name = "my-site"
+url = "https://example.com" # HTTP(S)-проба, замер TTFB, алерт на 5xx/таймауты
+interval = 10
+latency_warn_ms = 500
+
+[[target]]
+name = "postgres"
+host = "db.internal"        # TCP-хендшейк к порту
+port = 5432
+interval = 5
+fails_to_down = 2           # сколько фейлов подряд = DOWN

@@ -1,0 +1,44 @@
+[2026-10-30T19:14:59+00] INFO  [netwatch] Watching 4 target(s): https://example.com, one.one.one.one:443, dns:example.com, pool.ntp.org | interval=5.0s timeout=2.0s warn=250.0ms
+── netwatch · 2026-10-30T19:15:01+00  (Ctrl+C — выход)
+ ● https://example.com            UP        [https] rtt=   88ms avg=    88ms jit=     - loss=  0.0% (0/1)  p95=88ms HTTP 200
+ ● one.one.one.one:443            UP        [  tls] rtt=    1ms avg=     1ms jit=     - loss=  0.0% (0/1)  p95=1ms TLSv1.3 hs=53ms cert 52d left
+ ● dns:example.com                UP        [  dns] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/2)  p95=2ms @9.9.9.9 rcode=0 answers=104.20.23.154,1
+ ● pool.ntp.org                   UP        [  ntp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/2)  p95=2ms offset=-0.1ms
+
+── netwatch · 2026-10-30T19:15:03+00  (Ctrl+C — выход)
+ ● https://example.com            UP        [https] rtt=   88ms avg=    88ms jit=   0ms loss=  0.0% (0/2)  p95=88ms HTTP 200
+ ● one.one.one.one:443            UP        [  tls] rtt=    1ms avg=     1ms jit=   0ms loss=  0.0% (0/2)  p95=1ms TLSv1.3 hs=6ms cert 52d left
+ ● dns:example.com                UP        [  dns] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/3)  p95=2ms @9.9.9.9 rcode=0 answers=172.66.147.243,
+ ● pool.ntp.org                   UP        [  ntp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/3)  p95=2ms offset=+0.5ms
+
+── netwatch · 2026-10-30T19:15:05+00  (Ctrl+C — выход)
+ ● https://example.com            UP        [https] rtt=   76ms avg=    84ms jit=   6ms loss=  0.0% (0/3)  p95=88ms HTTP 200
+ ● one.one.one.one:443            UP        [  tls] rtt=    1ms avg=     1ms jit=   0ms loss=  0.0% (0/3)  p95=1ms TLSv1.3 hs=7ms cert 52d left
+ ● dns:example.com                UP        [  dns] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/4)  p95=2ms @9.9.9.9 rcode=0 answers=172.66.147.243,
+ ● pool.ntp.org                   UP        [  ntp] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/3)  p95=2ms offset=+0.5ms
+
+── netwatch · 2026-10-30T19:15:07+00  (Ctrl+C — выход)
+ ● https://example.com            UP        [https] rtt=   83ms avg=    84ms jit=   6ms loss=  0.0% (0/4)  p95=88ms HTTP 200
+ ● one.one.one.one:443            UP        [  tls] rtt=    1ms avg=     1ms jit=   0ms loss=  0.0% (0/4)  p95=1ms TLSv1.3 hs=6ms cert 52d left
+ ● dns:example.com                UP        [  dns] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/5)  p95=2ms @9.9.9.9 rcode=0 answers=172.66.147.243,
+ ● pool.ntp.org                   UP        [  ntp] rtt=    4ms avg=     8ms jit=  13ms loss=  0.0% (0/5)  p95=30ms offset=-2.7ms
+
+── netwatch · 2026-10-30T19:15:09+00  (Ctrl+C — выход)
+ ● https://example.com            UP        [https] rtt=  104ms avg=    88ms jit=  10ms loss=  0.0% (0/5)  p95=104ms HTTP 200
+ ● one.one.one.one:443            UP        [  tls] rtt=    1ms avg=     1ms jit=   0ms loss=  0.0% (0/5)  p95=1ms TLSv1.3 hs=9ms cert 52d left
+ ● dns:example.com                UP        [  dns] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/6)  p95=2ms @9.9.9.9 rcode=0 answers=172.66.147.243,
+ ● pool.ntp.org                   UP        [  ntp] rtt=    4ms avg=     7ms jit=  11ms loss=  0.0% (0/6)  p95=30ms offset=-3.9ms
+
+── netwatch · 2026-10-30T19:15:11+00  (Ctrl+C — выход)
+ ● https://example.com            UP        [https] rtt=   80ms avg=    87ms jit=  13ms loss=  0.0% (0/6)  p95=104ms HTTP 200
+ ● one.one.one.one:443            UP        [  tls] rtt=    1ms avg=     1ms jit=   0ms loss=  0.0% (0/6)  p95=1ms TLSv1.3 hs=7ms cert 52d left
+ ● dns:example.com                UP        [  dns] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/7)  p95=2ms @9.9.9.9 rcode=0 answers=104.20.23.154,1
+ ● pool.ntp.org                   UP        [  ntp] rtt=    2ms avg=     7ms jit=   9ms loss=  0.0% (0/7)  p95=30ms offset=-0.9ms
+
+[2026-10-30T19:15:11+00] INFO  [netwatch] Stopped
+
+Итоги:
+   ● https://example.com            UP        [https] rtt=   80ms avg=    87ms jit=  13ms loss=  0.0% (0/6)  p95=104ms HTTP 200
+   ● one.one.one.one:443            UP        [  tls] rtt=    1ms avg=     1ms jit=   0ms loss=  0.0% (0/6)  p95=1ms TLSv1.3 hs=7ms cert 52d left
+   ● dns:example.com                UP        [  dns] rtt=    2ms avg=     2ms jit=   0ms loss=  0.0% (0/7)  p95=2ms @9.9.9.9 rcode=0 answers=104.20.23.154,1
+   ● pool.ntp.org                   UP        [  ntp] rtt=    2ms avg=     7ms jit=   9ms loss=  0.0% (0/7)  p95=30ms offset=-0.9ms

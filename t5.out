@@ -1,0 +1,16 @@
+[2026-10-30T19:13:27+00] INFO  [netwatch] Watching 1 target(s): 192.0.2.123 | interval=2.0s timeout=1.0s warn=250.0ms
+[2026-10-30T19:13:28+00] WARN  [192.0.2.123] TCP-соединение — ТАЙМАУТ (хост молчит)
+── netwatch · 2026-10-30T19:13:29+00  (Ctrl+C — выход)
+ ○ 192.0.2.123                    UNKNOWN   [ icmp] rtt=      - avg=     0ms jit=     - loss=100.0% (1/1)
+
+[2026-10-30T19:13:30+00] CRIT! [192.0.2.123] UNREACHABLE (connect_timeout) | consec_fails=2 loss=100.0%
+── netwatch · 2026-10-30T19:13:31+00  (Ctrl+C — выход)
+ ● 192.0.2.123                    DOWN      [ icmp] rtt=      - avg=     0ms jit=     - loss=100.0% (2/2)
+
+── netwatch · 2026-10-30T19:13:33+00  (Ctrl+C — выход)
+ ● 192.0.2.123                    DOWN      [ icmp] rtt=      - avg=     0ms jit=     - loss=100.0% (2/2)
+
+[2026-10-30T19:13:33+00] INFO  [netwatch] Stopped
+
+Итоги:
+   ● 192.0.2.123                    DOWN      [ icmp] rtt=      - avg=     0ms jit=     - loss=100.0% (2/2)
